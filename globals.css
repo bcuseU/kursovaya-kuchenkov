@@ -1,0 +1,15 @@
+import Modal from './Modal'
+
+export default function Confirm({ message, onConfirm, onCancel, loading }) {
+  return (
+    <Modal title="Подтверждение" onClose={onCancel}>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{message}</p>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+        <button className="btn btn-ghost" onClick={onCancel} disabled={loading}>Отмена</button>
+        <button className="btn btn-danger" onClick={onConfirm} disabled={loading}>
+          {loading ? 'Удаление...' : 'Удалить'}
+        </button>
+      </div>
+    </Modal>
+  )
+}

@@ -1,0 +1,170 @@
+import { useState, useEffect } from 'react'
+import { getStudents, getSubjects, getGrades, upsertGrade, deleteGrade } from '../api'
+
+const GRADE_VALUES_EXAM = ['5', '4', '3', '2']
+const GRADE_VALUES_PASS = ['зачёт', 'незачёт']
+const GRADE_CLASS = { '5': 'grade-5', '4': 'grade-4', '3': 'grade-3', '2': 'grade-2', 'зачёт': 'grade-pass', 'незачёт': 'grade-fail' }
+
+export default function GradesPage() {
+  const [students, setStudents] = useState([])
+  const [subjects, setSubjects] = useState([])
+  const [grades, setGrades] = useState([]) // [{studentId, subjectId, value}]
+  const [loading, setLoading] = useState(true)
+  const [filterSem, setFilterSem] = useState('')
+  const [saving, setSaving] = useState({})
+
+  const load = () => {
+    setLoading(true)
+    Promise.all([getStudents(), getSubjects(), getGrades(filterSem || undefined)])
+      .then(([sr, subr, gr]) => {
+        setStudents(sr.data.filter(s => s.status === 'ACTIVE'))
+        setSubjects(subr.data)
+        setGrades(gr.data)
+      })
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [filterSem])
+
+  const filteredSubjects = filterSem ? subjects.filter(s => String(s.semester) === filterSem) : subjects
+  const semesters = [...new Set(subjects.map(s => s.semester))].sort((a, b) => a - b)
+
+  const gradeMap = {}
+  grades.forEach(g => { gradeMap[`${g.studentId}_${g.subjectId}`] = g.value })
+
+  const handleGrade = async (studentId, subject, value) => {
+    const key = `${studentId}_${subject.id}`
+    const current = gradeMap[key]
+    if (current === value) {
+      // toggle off — delete
+      setSaving(s => ({ ...s, [key]: true }))
+      try {
+        await deleteGrade(studentId, subject.id)
+        setGrades(prev => prev.filter(g => !(g.studentId === studentId && g.subjectId === subject.id)))
+      } catch {}
+      finally { setSaving(s => ({ ...s, [key]: false })) }
+    } else {
+      setSaving(s => ({ ...s, [key]: true }))
+      try {
+        await upsertGrade({ studentId, subjectId: subject.id, value })
+        setGrades(prev => {
+          const without = prev.filter(g => !(g.studentId === studentId && g.subjectId === subject.id))
+          return [...without, { studentId, subjectId: subject.id, value }]
+        })
+      } catch {}
+      finally { setSaving(s => ({ ...s, [key]: false })) }
+    }
+  }
+
+  // Group students by group
+  const groupMap = {}
+  students.forEach(s => {
+    const k = s.groupNumber || 'Без группы'
+    if (!groupMap[k]) groupMap[k] = []
+    groupMap[k].push(s)
+  })
+
+  return (
+    <div className="fade-in">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Успеваемость</div>
+          <div className="page-subtitle">Ведомость оценок</div>
+        </div>
+        <select className="form-select" style={{ minWidth: 150 }} value={filterSem} onChange={e => setFilterSem(e.target.value)}>
+          <option value="">Все семестры</option>
+          {semesters.map(s => <option key={s} value={s}>{s} семестр</option>)}
+        </select>
+      </div>
+
+      <div className="page-body">
+        {loading ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12, color: 'var(--text-muted)' }}>
+            <div className="spinner" /> Загрузка...
+          </div>
+        ) : filteredSubjects.length === 0 || students.length === 0 ? (
+          <div className="empty-state">
+            <h3>Нет данных</h3>
+            <p>Добавьте предметы и студентов</p>
+          </div>
+        ) : (
+          Object.entries(groupMap).map(([groupName, groupStudents]) => {
+            const groupSubjects = filterSem
+              ? filteredSubjects
+              : subjects.filter(subj => {
+                  const gs = groupStudents[0]
+                  return !subj.groupId || subj.groupId === gs?.groupId
+                })
+            if (groupSubjects.length === 0) return null
+            return (
+              <div key={groupName} style={{ marginBottom: 32 }}>
+                <div className="section-header">
+                  <div className="section-title">Группа {groupName}</div>
+                  <span className="tag">{groupStudents.length} студентов</span>
+                </div>
+                <div className="card" style={{ padding: 0, overflow: 'auto' }}>
+                  <table style={{ minWidth: 'max-content', width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ position: 'sticky', left: 0, background: 'var(--bg-card)', zIndex: 2, minWidth: 200 }}>Студент</th>
+                        {groupSubjects.map(subj => (
+                          <th key={subj.id} style={{ minWidth: 120, textAlign: 'center' }}>
+                            <div>{subj.name}</div>
+                            <div style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--text-dim)', fontSize: '0.65rem' }}>
+                              {subj.type === 'EXAM' ? 'Экзамен' : 'Зачёт'} · {subj.semester}с
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groupStudents.map(student => (
+                        <tr key={student.id}>
+                          <td style={{ position: 'sticky', left: 0, background: 'var(--bg-card)', zIndex: 1, fontWeight: 500, fontSize: '0.82rem' }}>
+                            {student.lastName} {student.firstName[0]}.{student.patronymic ? ` ${student.patronymic[0]}.` : ''}
+                          </td>
+                          {groupSubjects.map(subj => {
+                            const key = `${student.id}_${subj.id}`
+                            const current = gradeMap[key]
+                            const options = subj.type === 'EXAM' ? GRADE_VALUES_EXAM : GRADE_VALUES_PASS
+                            return (
+                              <td key={subj.id} style={{ textAlign: 'center', padding: '8px 6px' }}>
+                                <div style={{ display: 'flex', gap: 3, justifyContent: 'center', flexWrap: 'wrap' }}>
+                                  {options.map(v => (
+                                    <button
+                                      key={v}
+                                      onClick={() => handleGrade(student.id, subj, v)}
+                                      disabled={saving[key]}
+                                      style={{
+                                        padding: '3px 8px',
+                                        borderRadius: 6,
+                                        border: `1px solid ${current === v ? 'transparent' : 'var(--border)'}`,
+                                        background: current === v ? undefined : 'transparent',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        transition: 'var(--transition)',
+                                        opacity: saving[key] ? 0.5 : 1,
+                                      }}
+                                      className={current === v ? `badge ${GRADE_CLASS[v] || 'badge-gray'}` : ''}
+                                    >
+                                      {current !== v ? <span style={{ color: 'var(--text-dim)' }}>{v}</span> : v}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
+}
